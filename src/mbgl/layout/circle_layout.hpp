@@ -11,7 +11,12 @@ using PatternLayerMap = std::map<std::string, PatternDependency>;
 
 class CircleFeature  {
 public:
-    friend bool operator < (const CircleFeature& lhs, const CircleFeature& rhs) {
+    CircleFeature(std::size_t i_,
+                   std::unique_ptr<GeometryTileFeature> feature_,
+                   float sortKey_ = 0.0f)
+    : i(i_), feature(std::move(feature_)), sortKey(sortKey_) {}
+
+    friend bool operator< (const CircleFeature& lhs, const CircleFeature& rhs) {
         return lhs.sortKey < rhs.sortKey;
     }
 
@@ -47,11 +52,15 @@ public:
             if (!leaderLayerProperties->layerImpl().filter(style::expression::EvaluationContext { this->zoom, feature.get() }))
                 continue;
 
-            auto sortKey = evaluateSortKey(*feature);
-            
-            CircleFeature circleFeature{i, std::move(feature), sortKey};
-            const auto sortPosition = std::lower_bound(features.cbegin(), features.cend(), circleFeature);
-            features.insert(sortPosition, std::move(circleFeature));
+            if (unevaluatedLayout.get<style::CircleSortKey>().isUndefined()) {
+                features.emplace_back(i, std::move(feature));
+            } else {
+                const auto sortKey = evaluateSortKey(*feature);
+
+                CircleFeature circleFeature{i, std::move(feature), sortKey};
+                const auto sortPosition = std::lower_bound(features.cbegin(), features.cend(), circleFeature);
+                features.insert(sortPosition, std::move(circleFeature));
+            }
         }
     };
 
