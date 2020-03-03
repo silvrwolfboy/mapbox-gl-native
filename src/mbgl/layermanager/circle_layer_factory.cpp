@@ -1,7 +1,6 @@
 #include <mbgl/layermanager/circle_layer_factory.hpp>
 
 #include <mbgl/layout/circle_layout.hpp>
-#include <mbgl/renderer/buckets/circle_bucket.hpp>
 #include <mbgl/renderer/layers/render_circle_layer.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
 #include <mbgl/style/layers/circle_layer_impl.hpp>

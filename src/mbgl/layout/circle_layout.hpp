@@ -2,8 +2,11 @@
 #include <mbgl/geometry/feature_index.hpp>
 #include <mbgl/layout/layout.hpp>
 #include <mbgl/renderer/bucket_parameters.hpp>
+#include <mbgl/renderer/buckets/circle_bucket.hpp>
 #include <mbgl/renderer/render_layer.hpp>
 #include <mbgl/style/layer_properties.hpp>
+#include <mbgl/style/layers/circle_layer.hpp>
+#include <mbgl/style/layers/circle_layer_impl.hpp>
 
 namespace mbgl {
 
