@@ -95,21 +95,20 @@ public:
             drawScopeIt = segment.drawScopes.emplace(layerID, context.createDrawScope()).first;
         }
 
-        program->draw(
-            context,
-            renderPass,
-            drawMode,
-            depthMode,
-            stencilMode,
-            colorMode,
-            cullFaceMode,
-            uniformValues,
-            drawScopeIt->second,
-            allAttributeBindings.offset(segment.vertexOffset),
-            textureBindings,
-            indexBuffer,
-            segment.indexOffset,
-            segment.indexLength);
+        program->draw(context,
+                      renderPass,
+                      drawMode,
+                      depthMode,
+                      stencilMode,
+                      colorMode,
+                      cullFaceMode,
+                      uniformValues,
+                      drawScopeIt->second,
+                      allAttributeBindings.offset(segment.vertexOffset),
+                      textureBindings,
+                      indexBuffer,
+                      segment.indexOffset,
+                      segment.indexLength);
     }
 
     template <class DrawMode>

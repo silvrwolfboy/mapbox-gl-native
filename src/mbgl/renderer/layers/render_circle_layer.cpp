@@ -24,12 +24,12 @@ struct RenderableSegment {
                       const CircleProgram::UniformValues allUniformValues_,
                       const CircleProgram::AttributeBindings allAttributeBindings_,
                       float sortKey_)
-    : segment(segment_),
-        programInstance(programInstance_),
-        bucket(bucket_),
-        allUniformValues(allUniformValues_),
-        allAttributeBindings(allAttributeBindings_),
-        sortKey(sortKey_) {}
+        : segment(segment_),
+          programInstance(programInstance_),
+          bucket(bucket_),
+          allUniformValues(allUniformValues_),
+          allAttributeBindings(allAttributeBindings_),
+          sortKey(sortKey_) {}
 
     const Segment<CircleAttributes>& segment;
     CircleProgram& programInstance;
@@ -38,7 +38,7 @@ struct RenderableSegment {
     const CircleProgram::AttributeBindings allAttributeBindings;
     const float sortKey;
 
-    friend bool operator < (const RenderableSegment& lhs, const RenderableSegment& rhs) {
+    friend bool operator<(const RenderableSegment& lhs, const RenderableSegment& rhs) {
         return lhs.sortKey < rhs.sortKey;
     }
 };
@@ -137,45 +137,41 @@ void RenderCircleLayer::render(PaintParameters& parameters) {
 
         if (sortFeaturesByKey) {
             for (auto& segment : bucket.segments) {
-                renderableSegments.emplace(segment, programInstance, bucket, allUniformValues, allAttributeBindings, segment.sortKey);
+                renderableSegments.emplace(
+                    segment, programInstance, bucket, allUniformValues, allAttributeBindings, segment.sortKey);
             }
-        }
-        else {
-            programInstance.draw(
-                parameters.context,
-                *parameters.renderPass,
-                gfx::Triangles(),
-                parameters.depthModeForSublayer(0, gfx::DepthMaskType::ReadOnly),
-                gfx::StencilMode::disabled(),
-                parameters.colorModeForRenderPass(),
-                gfx::CullFaceMode::disabled(),
-                *bucket.indexBuffer,
-                bucket.segments,
-                allUniformValues,
-                allAttributeBindings,
-                CircleProgram::TextureBindings{},
-                getID()
-            );
+        } else {
+            programInstance.draw(parameters.context,
+                                 *parameters.renderPass,
+                                 gfx::Triangles(),
+                                 parameters.depthModeForSublayer(0, gfx::DepthMaskType::ReadOnly),
+                                 gfx::StencilMode::disabled(),
+                                 parameters.colorModeForRenderPass(),
+                                 gfx::CullFaceMode::disabled(),
+                                 *bucket.indexBuffer,
+                                 bucket.segments,
+                                 allUniformValues,
+                                 allAttributeBindings,
+                                 CircleProgram::TextureBindings{},
+                                 getID());
         }
     }
 
     if (sortFeaturesByKey) {
-        for (const auto& renderable: renderableSegments) {
-            renderable.programInstance.draw(
-                parameters.context,
-                *parameters.renderPass,
-                gfx::Triangles(),
-                parameters.depthModeForSublayer(0, gfx::DepthMaskType::ReadOnly),
-                gfx::StencilMode::disabled(),
-                parameters.colorModeForRenderPass(),
-                gfx::CullFaceMode::disabled(),
-                *renderable.bucket.indexBuffer,
-                renderable.segment,
-                renderable.allUniformValues,
-                renderable.allAttributeBindings,
-                CircleProgram::TextureBindings{},
-                getID()
-            );
+        for (const auto& renderable : renderableSegments) {
+            renderable.programInstance.draw(parameters.context,
+                                            *parameters.renderPass,
+                                            gfx::Triangles(),
+                                            parameters.depthModeForSublayer(0, gfx::DepthMaskType::ReadOnly),
+                                            gfx::StencilMode::disabled(),
+                                            parameters.colorModeForRenderPass(),
+                                            gfx::CullFaceMode::disabled(),
+                                            *renderable.bucket.indexBuffer,
+                                            renderable.segment,
+                                            renderable.allUniformValues,
+                                            renderable.allAttributeBindings,
+                                            CircleProgram::TextureBindings{},
+                                            getID());
         }
     }
 }

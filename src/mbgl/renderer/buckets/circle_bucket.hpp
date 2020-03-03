@@ -13,7 +13,6 @@ namespace mbgl {
 
 class BucketParameters;
 
-
 class CircleBucket final : public Bucket {
 public:
     using PossiblyEvaluatedLayoutProperties = style::CircleLayoutProperties::PossiblyEvaluated;

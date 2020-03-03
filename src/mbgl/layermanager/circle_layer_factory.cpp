@@ -1,10 +1,10 @@
 #include <mbgl/layermanager/circle_layer_factory.hpp>
 
+#include <mbgl/layout/circle_layout.hpp>
 #include <mbgl/renderer/buckets/circle_bucket.hpp>
 #include <mbgl/renderer/layers/render_circle_layer.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
 #include <mbgl/style/layers/circle_layer_impl.hpp>
-#include <mbgl/layout/circle_layout.hpp>
 
 namespace mbgl {
 
@@ -25,9 +25,10 @@ std::unique_ptr<style::Layer> CircleLayerFactory::createLayer(const std::string&
     return layer;
 }
 
-std::unique_ptr<Layout> CircleLayerFactory::createLayout(const LayoutParameters& parameters,
-                                                       std::unique_ptr<GeometryTileLayer> layer,
-                                                       const std::vector<Immutable<style::LayerProperties>>& group) noexcept {
+std::unique_ptr<Layout> CircleLayerFactory::createLayout(
+    const LayoutParameters& parameters,
+    std::unique_ptr<GeometryTileLayer> layer,
+    const std::vector<Immutable<style::LayerProperties>>& group) noexcept {
     return std::make_unique<CircleLayout>(parameters.bucketParameters, group, std::move(layer));
 }
 

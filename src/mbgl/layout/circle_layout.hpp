@@ -1,7 +1,7 @@
 #pragma once
+#include <mbgl/geometry/feature_index.hpp>
 #include <mbgl/layout/layout.hpp>
 #include <mbgl/renderer/bucket_parameters.hpp>
-#include <mbgl/geometry/feature_index.hpp>
 #include <mbgl/renderer/render_layer.hpp>
 #include <mbgl/style/layer_properties.hpp>
 
@@ -9,16 +9,12 @@ namespace mbgl {
 
 using PatternLayerMap = std::map<std::string, PatternDependency>;
 
-class CircleFeature  {
+class CircleFeature {
 public:
-    CircleFeature(std::size_t i_,
-                   std::unique_ptr<GeometryTileFeature> feature_,
-                   float sortKey_ = 0.0f)
-    : i(i_), feature(std::move(feature_)), sortKey(sortKey_) {}
+    CircleFeature(std::size_t i_, std::unique_ptr<GeometryTileFeature> feature_, float sortKey_ = 0.0f)
+        : i(i_), feature(std::move(feature_)), sortKey(sortKey_) {}
 
-    friend bool operator< (const CircleFeature& lhs, const CircleFeature& rhs) {
-        return lhs.sortKey < rhs.sortKey;
-    }
+    friend bool operator<(const CircleFeature& lhs, const CircleFeature& rhs) { return lhs.sortKey < rhs.sortKey; }
 
     size_t i;
     std::unique_ptr<GeometryTileFeature> feature;
@@ -28,12 +24,12 @@ public:
 class CircleLayout : public Layout {
 public:
     CircleLayout(const BucketParameters& parameters,
-                  const std::vector<Immutable<style::LayerProperties>>& group,
-                  std::unique_ptr<GeometryTileLayer> sourceLayer_)
-                  : sourceLayer(std::move(sourceLayer_)),
-                    zoom(parameters.tileID.overscaledZ),
-                    mode(parameters.mode),
-                    hasPattern(false) {
+                 const std::vector<Immutable<style::LayerProperties>>& group,
+                 std::unique_ptr<GeometryTileLayer> sourceLayer_)
+        : sourceLayer(std::move(sourceLayer_)),
+          zoom(parameters.tileID.overscaledZ),
+          mode(parameters.mode),
+          hasPattern(false) {
         assert(!group.empty());
         auto leaderLayerProperties = staticImmutableCast<style::CircleLayerProperties>(group.front());
         unevaluatedLayout = leaderLayerProperties->layerImpl().layout;
@@ -49,7 +45,8 @@ public:
         const size_t featureCount = sourceLayer->featureCount();
         for (size_t i = 0; i < featureCount; ++i) {
             auto feature = sourceLayer->getFeature(i);
-            if (!leaderLayerProperties->layerImpl().filter(style::expression::EvaluationContext { this->zoom, feature.get() }))
+            if (!leaderLayerProperties->layerImpl().filter(
+                    style::expression::EvaluationContext{this->zoom, feature.get()}))
                 continue;
 
             if (unevaluatedLayout.get<style::CircleSortKey>().isUndefined()) {
@@ -66,11 +63,13 @@ public:
 
     ~CircleLayout() final = default;
 
-    bool hasDependencies() const override {
-        return hasPattern;
-    }
+    bool hasDependencies() const override { return hasPattern; }
 
-    void createBucket(const ImagePositions&, std::unique_ptr<FeatureIndex>& featureIndex, std::unordered_map<std::string, LayerRenderData>& renderData, const bool, const bool) override {
+    void createBucket(const ImagePositions&,
+                      std::unique_ptr<FeatureIndex>& featureIndex,
+                      std::unordered_map<std::string, LayerRenderData>& renderData,
+                      const bool,
+                      const bool) override {
         auto bucket = std::make_shared<CircleBucket>(layerPropertiesMap, mode, zoom);
 
         for (auto& circleFeature : features) {
@@ -83,13 +82,17 @@ public:
         }
         if (bucket->hasData()) {
             for (const auto& pair : layerPropertiesMap) {
-                renderData.emplace(pair.first, LayerRenderData {bucket, pair.second});
+                renderData.emplace(pair.first, LayerRenderData{bucket, pair.second});
             }
         }
     };
 
 private:
-    void addCircle(CircleBucket& bucket, const GeometryTileFeature& feature, const GeometryCollection& geometry, std::size_t featureIndex, float sortKey) {
+    void addCircle(CircleBucket& bucket,
+                   const GeometryTileFeature& feature,
+                   const GeometryCollection& geometry,
+                   std::size_t featureIndex,
+                   float sortKey) {
         constexpr const uint16_t vertexLength = 4;
 
         auto& segments = bucket.segments;
@@ -97,17 +100,18 @@ private:
         auto& triangles = bucket.triangles;
 
         for (auto& circle : geometry) {
-            for(auto& point : circle) {
+            for (auto& point : circle) {
                 auto x = point.x;
                 auto y = point.y;
 
                 // Do not include points that are outside the tile boundaries.
                 // Include all points in Still mode. You need to include points from
                 // neighbouring tiles so that they are not clipped at tile boundaries.
-                if ((mode == MapMode::Continuous) &&
-                    (x < 0 || x >= util::EXTENT || y < 0 || y >= util::EXTENT)) continue;
+                if ((mode == MapMode::Continuous) && (x < 0 || x >= util::EXTENT || y < 0 || y >= util::EXTENT))
+                    continue;
 
-                if (segments.empty() || segments.back().vertexLength + vertexLength > std::numeric_limits<uint16_t>::max()) {
+                if (segments.empty() ||
+                    segments.back().vertexLength + vertexLength > std::numeric_limits<uint16_t>::max()) {
                     // Move to a new segments because the old one can't hold the geometry.
                     segments.emplace_back(vertices.elements(), triangles.elements(), 0ul, 0ul, sortKey);
                 }
@@ -122,9 +126,9 @@ private:
                 // └─────────┘
                 //
                 vertices.emplace_back(CircleProgram::vertex(point, -1, -1)); // 1
-                vertices.emplace_back(CircleProgram::vertex(point,  1, -1)); // 2
-                vertices.emplace_back(CircleProgram::vertex(point,  1,  1)); // 3
-                vertices.emplace_back(CircleProgram::vertex(point, -1,  1)); // 4
+                vertices.emplace_back(CircleProgram::vertex(point, 1, -1));  // 2
+                vertices.emplace_back(CircleProgram::vertex(point, 1, 1));   // 3
+                vertices.emplace_back(CircleProgram::vertex(point, -1, 1));  // 4
 
                 auto& segment = segments.back();
                 assert(segment.vertexLength <= std::numeric_limits<uint16_t>::max());
@@ -165,4 +169,3 @@ private:
 };
 
 } // namespace mbgl
-
