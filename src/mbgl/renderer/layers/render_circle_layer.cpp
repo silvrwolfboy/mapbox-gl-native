@@ -21,8 +21,8 @@ struct RenderableSegment {
     RenderableSegment(const Segment<CircleAttributes>& segment_,
                       CircleProgram& programInstance_,
                       const CircleBucket& bucket_,
-                      const CircleProgram::UniformValues& allUniformValues_,
-                      const CircleProgram::AttributeBindings& allAttributeBindings_,
+                      const CircleProgram::UniformValues allUniformValues_,
+                      const CircleProgram::AttributeBindings allAttributeBindings_,
                       float sortKey_)
     : segment(segment_),
         programInstance(programInstance_),
@@ -34,8 +34,8 @@ struct RenderableSegment {
     const Segment<CircleAttributes>& segment;
     CircleProgram& programInstance;
     const CircleBucket& bucket;
-    const CircleProgram::UniformValues& allUniformValues;
-    const CircleProgram::AttributeBindings& allAttributeBindings;
+    const CircleProgram::UniformValues allUniformValues;
+    const CircleProgram::AttributeBindings allAttributeBindings;
     const float sortKey;
 
     friend bool operator < (const RenderableSegment& lhs, const RenderableSegment& rhs) {
