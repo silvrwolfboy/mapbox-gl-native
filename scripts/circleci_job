@@ -1,0 +1,93 @@
+#!/usr/bin/python3
+
+import argparse
+import os
+import requests
+import sys
+import time
+
+def StartJob(slug, token, params):
+    url = "https://circleci.com/api/v2/project/github/%s/pipeline" % (slug)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    data = {
+        "parameters": {
+            "upstream" : True,
+            "hash" : "foobar"
+        }
+    }
+
+    r = requests.post(url, auth=(token, ""), headers=headers, json=data)
+
+    if r.status_code != 201:
+        print("Error triggering the CircleCI: %s." % r.json()["message"])
+        sys.exit(1)
+
+    return r.json()["id"]
+
+
+def MonitorJob(slug, token, timeout, id):
+    url = "https://circleci.com/api/v2/pipeline/%s/workflow" % id
+
+    headers = {
+        "Accept": "application/json"
+    }
+
+    while 1:
+        r = requests.get(url, auth=(token, ""), headers=headers)
+
+        if r.status_code != 200:
+            print("Error monitoring CircleCI job: %s." % r.json()["message"])
+            sys.exit(1)
+
+        success = 0
+        workflows = r.json()["items"]
+
+        for workflow in workflows:
+            if workflow["stopped_at"]:
+                if workflow["status"] == "success":
+                    success += 1
+                else:
+                    print("Job failed.")
+                    sys.exit(1)
+
+            if success == len(workflows):
+                print("Job succeeded.")
+                sys.exit(0)
+
+            time.sleep(10)
+
+
+def Main():
+    token = os.getenv("CIRCLE_API_TOKEN")
+
+    parser = argparse.ArgumentParser(
+        description="Creates CircleCI jobs and waits for the result.")
+
+    parser.add_argument("--timeout", type=int, default=10, help=
+            "Timeout in minutes, defaults to 10 minutres")
+    parser.add_argument("--token", default=token, help=
+            "CircleCI token, otherwise environment CIRCLE_API_TOKEN.")
+    parser.add_argument("--slug", required=True, help=
+            "Repository slug, example: mapbox/mapbox-gl-native.")
+    parser.add_argument("--params", default="", help=
+            "Parameter to be passed to the job.")
+
+    args = parser.parse_args()
+
+    if not args.token:
+        print("CircleCI token not set. Use --token or set CIRCLE_API_TOKEN.")
+        sys.exit(1)
+
+    id = StartJob(args.slug, args.token, args.params)
+    MonitorJob(args.slug, args.token, args.timeout, id)
+
+    return 0
+
+
+if __name__ == "__main__":
+    Main()
