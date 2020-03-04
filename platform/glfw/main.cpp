@@ -21,9 +21,28 @@
 #include <cstdio>
 #include <array>
 
+#include <mbgl/style/expression/dsl.hpp>
+#include <mbgl/style/image.hpp>
+#include <mbgl/style/layers/circle_layer.hpp>
+#include <mbgl/style/layers/fill_extrusion_layer.hpp>
+#include <mbgl/style/layers/fill_layer.hpp>
+#include <mbgl/style/layers/line_layer.hpp>
+#include <mbgl/style/layers/symbol_layer.hpp>
+
 namespace {
 
 GLFWView* view = nullptr;
+
+// std::string read_file(const std::string &filename) {
+//    std::ifstream file(filename, std::ios::binary);
+//    if (file.good()) {
+//        std::stringstream data;
+//        data << file.rdbuf();
+//        return data.str();
+//    } else {
+//        throw std::runtime_error(std::string("Cannot read file ") + filename);
+//    }
+//}
 
 } // namespace
 
@@ -131,8 +150,8 @@ int main(int argc, char *argv[]) {
     }
 
     map.jumpTo(mbgl::CameraOptions()
-                   .withCenter(mbgl::LatLng {settings.latitude, settings.longitude})
-                   .withZoom(settings.zoom)
+                   .withCenter(mbgl::LatLng {6, 6})
+                   .withZoom(4)
                    .withBearing(settings.bearing)
                    .withPitch(settings.pitch));
     map.setDebug(mbgl::MapDebugOptions(settings.debug));
@@ -189,22 +208,74 @@ int main(int argc, char *argv[]) {
             }
         });
     });
-
+    
+    
     // Load style
-    if (style.empty()) {
-        const char *url = getenv("MAPBOX_STYLE_URL");
-        if (url == nullptr) {
-            mbgl::util::default_styles::DefaultStyle newStyle = mbgl::util::default_styles::orderedStyles[0];
-            style = newStyle.url;
-            view->setWindowTitle(newStyle.name);
-        } else {
-            style = url;
-            view->setWindowTitle(url);
-        }
-    }
+//       if (style.empty()) {
+//           const char *url = getenv("MAPBOX_STYLE_URL");
+//           if (url == nullptr) {
+//               mbgl::util::default_styles::DefaultStyle newStyle = mbgl::util::default_styles::orderedStyles[0];
+//               style = newStyle.url;
+//               view->setWindowTitle(newStyle.name);
+//           } else {
+//               style = url;
+//               view->setWindowTitle(url);
+//           }
+//       }
+//
+//       map.getStyle().loadURL(style);
+    
 
-    map.getStyle().loadURL(style);
-
+    view->setWindowTitle("WithinExpressionTest");
+//    map.getStyle().loadURL("mapbox://styles/mizh0601/ck5mbn0jx1yx71ipomhpv06xv");
+    map.getStyle().loadURL("mapbox://styles/mizh0601/ck0pjw3ig1u3y1csc62plhn42/draft");
+    map.jumpTo(mbgl::CameraOptions()
+                        .withCenter(mbgl::LatLng {60.16, 24.8})
+                        .withZoom(15));
+//    map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/style.json"));
+//    map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/filter_within.json"));
+//    map.jumpTo(mbgl::CameraOptions()
+//                      .withCenter(mbgl::LatLng {3, 3})
+//                      .withZoom(3)
+//                      .withBearing(settings.bearing)
+//                      .withPitch(settings.pitch));
+    
+    
+//        map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/unit_test.json"));
+//        map.jumpTo(mbgl::CameraOptions()
+//                          .withCenter(mbgl::LatLng {-9, -24})
+//                          .withZoom(4)
+//                          .withBearing(settings.bearing)
+//                          .withPitch(settings.pitch));
+    
+//     map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/unit_test2.json"));
+//            map.jumpTo(mbgl::CameraOptions()
+//                              .withCenter(mbgl::LatLng {-1, -27})
+//                              .withZoom(3)
+//                              .withBearing(settings.bearing)
+//                              .withPitch(settings.pitch));
+    
+//    map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/line.json"));
+//    map.jumpTo(mbgl::CameraOptions()
+//                    .withCenter(mbgl::LatLng {3, -20})
+//                    .withZoom(3)
+//                    .withBearing(settings.bearing)
+//                    .withPitch(settings.pitch));
+    
+//    map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/simple.json"));
+//    map.jumpTo(mbgl::CameraOptions()
+//                    .withCenter(mbgl::LatLng {-28, -17})
+//                    .withZoom(2)
+//                    .withBearing(settings.bearing)
+//                    .withPitch(settings.pitch));
+    
+//        map.getStyle().loadJSON(read_file("/Users/miaozhao/Work/MacOs/testStyle.json"));
+//        map.jumpTo(mbgl::CameraOptions()
+//                        .withCenter(mbgl::LatLng {-28, -17})
+//                        .withZoom(2)
+//                        .withBearing(settings.bearing)
+//                        .withPitch(settings.pitch));
+    
     view->run();
 
     // Save settings

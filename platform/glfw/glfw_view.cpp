@@ -11,9 +11,11 @@
 #include <mbgl/renderer/renderer.hpp>
 #include <mbgl/style/expression/dsl.hpp>
 #include <mbgl/style/image.hpp>
+#include <mbgl/style/layers/circle_layer.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer.hpp>
 #include <mbgl/style/layers/fill_layer.hpp>
 #include <mbgl/style/layers/line_layer.hpp>
+#include <mbgl/style/layers/symbol_layer.hpp>
 #include <mbgl/style/sources/custom_geometry_source.hpp>
 #include <mbgl/style/sources/geojson_source.hpp>
 #include <mbgl/style/style.hpp>
@@ -23,10 +25,25 @@
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/platform.hpp>
 #include <mbgl/util/string.hpp>
+#include <mbgl/util/geometry_buffer.hpp>
 
 #include <mapbox/cheap_ruler.hpp>
-#include <mapbox/geometry.hpp>
 #include <mapbox/geojson.hpp>
+#include <mapbox/geometry.hpp>
+
+#include <sstream>
+
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point_xy.hpp>
+#include <boost/geometry/geometries/geometries.hpp>
+
+#include <mbgl/util/variant.hpp>
+#include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/rapidjson.h>
+#include <rapidjson/error/en.h>
+#include <mapbox/geojson_impl.hpp>
 
 #if MBGL_USE_GLES2
 #define GLFW_INCLUDE_ES2
@@ -44,8 +61,7 @@ void glfwError(int error, const char *description) {
     assert(false);
 }
 
-GLFWView::GLFWView(bool fullscreen_, bool benchmark_)
-    : fullscreen(fullscreen_), benchmark(benchmark_) {
+GLFWView::GLFWView(bool fullscreen_, bool benchmark_) : fullscreen(fullscreen_), benchmark(benchmark_) {
     glfwSetErrorCallback(glfwError);
 
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
@@ -130,7 +146,9 @@ GLFWView::GLFWView(bool fullscreen_, bool benchmark_)
     printf("- Press `I` to delete existing database and re-initialize\n");
     printf("- Press `A` to cycle through Mapbox offices in the world + dateline monument\n");
     printf("- Press `B` to cycle through the color, stencil, and depth buffer\n");
-    printf("- Press `D` to cycle through camera bounds: inside, crossing IDL at left, crossing IDL at right, and disabled\n");
+    printf(
+        "- Press `D` to cycle through camera bounds: inside, crossing IDL at left, crossing IDL at right, and "
+        "disabled\n");
     printf("- Press `T` to add custom geometry source\n");
     printf("\n");
     printf("- Press `1` through `6` to add increasing numbers of point annotations for testing\n");
@@ -164,11 +182,11 @@ void GLFWView::setMap(mbgl::Map *map_) {
     map->addAnnotationImage(makeImage("default_marker", 22, 22, 1));
 }
 
-void GLFWView::setRenderFrontend(GLFWRendererFrontend* rendererFrontend_) {
+void GLFWView::setRenderFrontend(GLFWRendererFrontend *rendererFrontend_) {
     rendererFrontend = rendererFrontend_;
 }
 
-mbgl::gfx::RendererBackend& GLFWView::getRendererBackend() {
+mbgl::gfx::RendererBackend &GLFWView::getRendererBackend() {
     return backend->getRendererBackend();
 }
 
@@ -176,235 +194,522 @@ void GLFWView::onKey(GLFWwindow *window, int key, int /*scancode*/, int action, 
     auto *view = reinterpret_cast<GLFWView *>(glfwGetWindowUserPointer(window));
 
     if (action == GLFW_RELEASE) {
-        if (key != GLFW_KEY_R || key != GLFW_KEY_S)
-            view->animateRouteCallback = nullptr;
+        if (key != GLFW_KEY_R || key != GLFW_KEY_S) view->animateRouteCallback = nullptr;
 
         switch (key) {
-        case GLFW_KEY_ESCAPE:
-            glfwSetWindowShouldClose(window, true);
-            break;
-        case GLFW_KEY_TAB:
-            view->cycleDebugOptions();
-            break;
-        case GLFW_KEY_X:
-            if (!mods)
-                view->map->jumpTo(mbgl::CameraOptions().withCenter(mbgl::LatLng {}).withZoom(0.0).withBearing(0.0).withPitch(0.0));
-            break;
-        case GLFW_KEY_O:
-            view->onlineStatusCallback();
-            break;
-        case GLFW_KEY_S:
-            if (view->changeStyleCallback)
-                view->changeStyleCallback();
-            break;
+            case GLFW_KEY_ESCAPE:
+                glfwSetWindowShouldClose(window, true);
+                break;
+            case GLFW_KEY_TAB:
+                view->cycleDebugOptions();
+                break;
+            case GLFW_KEY_X:
+                if (!mods)
+                    view->map->jumpTo(
+                        mbgl::CameraOptions().withCenter(mbgl::LatLng{}).withZoom(0.0).withBearing(0.0).withPitch(0.0));
+                break;
+            case GLFW_KEY_O:
+                view->onlineStatusCallback();
+                break;
+            case GLFW_KEY_S:
+                if (view->changeStyleCallback) view->changeStyleCallback();
+                break;
 #if not MBGL_USE_GLES2
-        case GLFW_KEY_B: {
-            auto debug = view->map->getDebug();
-            if (debug & mbgl::MapDebugOptions::StencilClip) {
-                debug &= ~mbgl::MapDebugOptions::StencilClip;
-                debug |= mbgl::MapDebugOptions::DepthBuffer;
-            } else if (debug & mbgl::MapDebugOptions::DepthBuffer) {
-                debug &= ~mbgl::MapDebugOptions::DepthBuffer;
-            } else {
-                debug |= mbgl::MapDebugOptions::StencilClip;
-            }
-            view->map->setDebug(debug);
-        } break;
-#endif // MBGL_USE_GLES2
-        case GLFW_KEY_N:
-            if (!mods)
-                view->map->easeTo(mbgl::CameraOptions().withBearing(0.0), mbgl::AnimationOptions {{mbgl::Milliseconds(500)}});
-            break;
-        case GLFW_KEY_Z:
-            view->nextOrientation();
-            break;
-        case GLFW_KEY_Q: {
-            auto result = view->rendererFrontend->getRenderer()->queryPointAnnotations({ {}, { double(view->getSize().width), double(view->getSize().height) } });
-            printf("visible point annotations: %lu\n", result.size());
-        } break;
-        case GLFW_KEY_P:
-            view->pauseResumeCallback();
-            break;
-        case GLFW_KEY_C:
-            view->clearAnnotations();
-            break;
-        case GLFW_KEY_I:
-            view->resetDatabaseCallback();
-            break;
-        case GLFW_KEY_K:
-            view->addRandomCustomPointAnnotations(1);
-            break;
-        case GLFW_KEY_L:
-            view->addRandomLineAnnotations(1);
-            break;
-        case GLFW_KEY_A: {
-            // XXX Fix precision loss in flyTo:
-            // https://github.com/mapbox/mapbox-gl-native/issues/4298
-            static const std::vector<mbgl::LatLng> places = {
-                mbgl::LatLng { -16.796665, -179.999983 },   // Dateline monument
-                mbgl::LatLng { 12.9810542, 77.6345551 },    // Mapbox Bengaluru, India
-                mbgl::LatLng { -13.15607,-74.21773 },       // Mapbox Peru
-                mbgl::LatLng { 37.77572, -122.4158818 },    // Mapbox SF, USA
-                mbgl::LatLng { 38.91318,-77.03255 },        // Mapbox DC, USA
-            };
-            static size_t nextPlace = 0;
-            mbgl::CameraOptions cameraOptions;
-            cameraOptions.center = places[nextPlace++];
-            cameraOptions.zoom = 20;
-            cameraOptions.pitch = 30;
-
-            mbgl::AnimationOptions animationOptions(mbgl::Seconds(10));
-            view->map->flyTo(cameraOptions, animationOptions);
-            nextPlace = nextPlace % places.size();
-        } break;
-        case GLFW_KEY_R: {
-            view->show3DExtrusions = true;
-            view->toggle3DExtrusions(view->show3DExtrusions);
-            if (view->animateRouteCallback) break;
-            view->animateRouteCallback = [](mbgl::Map* routeMap) {
-                static mapbox::cheap_ruler::CheapRuler ruler { 40.7 }; // New York
-                static mapbox::geojson::geojson route { mapbox::geojson::parse(mbgl::platform::glfw::route) };
-                const auto& geometry = route.get<mapbox::geometry::geometry<double>>();
-                const auto& lineString = geometry.get<mapbox::geometry::line_string<double>>();
-
-                static double routeDistance = ruler.lineDistance(lineString);
-                static double routeProgress = 0;
-                routeProgress += 0.0005;
-                if (routeProgress > 1.0) {
-                    routeProgress = 0.0;
-                }
-
-                auto camera = routeMap->getCameraOptions();
-
-                auto point = ruler.along(lineString, routeProgress * routeDistance);
-                const mbgl::LatLng center { point.y, point.x };
-                auto latLng = *camera.center;
-                double bearing = ruler.bearing({ latLng.longitude(), latLng.latitude() }, point);
-                double easing = bearing - *camera.bearing;
-                easing += easing > 180.0 ? -360.0 : easing < -180 ? 360.0 : 0;
-                bearing = *camera.bearing + (easing / 20);
-                routeMap->jumpTo(mbgl::CameraOptions().withCenter(center).withZoom(18.0).withBearing(bearing).withPitch(60.0));
-            };
-            view->animateRouteCallback(view->map);
-        } break;
-        case GLFW_KEY_E:
-            view->toggle3DExtrusions(!view->show3DExtrusions);
-            break;
-        case GLFW_KEY_D: {
-            static const std::vector<mbgl::LatLngBounds> bounds = {
-                mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, -170.0}, mbgl::LatLng{45.0, 170.0}),  // inside
-                mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, -200.0}, mbgl::LatLng{45.0, -160.0}), // left IDL
-                mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, 160.0}, mbgl::LatLng{45.0, 200.0}),   // right IDL
-                mbgl::LatLngBounds()};
-            static size_t nextBound = 0u;
-            static mbgl::AnnotationID boundAnnotationID = std::numeric_limits<mbgl::AnnotationID>::max();
-
-            mbgl::LatLngBounds bound = bounds[nextBound++];
-            nextBound = nextBound % bounds.size();
-
-            view->map->setBounds(mbgl::BoundOptions().withLatLngBounds(bound));
-
-            if (bound == mbgl::LatLngBounds()) {
-                view->map->removeAnnotation(boundAnnotationID);
-                boundAnnotationID = std::numeric_limits<mbgl::AnnotationID>::max();
-            } else {
-                mbgl::Polygon<double> rect;
-                rect.push_back({
-                    mbgl::Point<double>{ bound.west(), bound.north() },
-                    mbgl::Point<double>{ bound.east(), bound.north() },
-                    mbgl::Point<double>{ bound.east(), bound.south() },
-                    mbgl::Point<double>{ bound.west(), bound.south() },
-                });
-
-                auto boundAnnotation = mbgl::FillAnnotation { rect, 0.5f, { view->makeRandomColor() }, { view->makeRandomColor() } };
-
-                if (boundAnnotationID == std::numeric_limits<mbgl::AnnotationID>::max()) {
-                    boundAnnotationID = view->map->addAnnotation(boundAnnotation);
+            case GLFW_KEY_B: {
+                auto debug = view->map->getDebug();
+                if (debug & mbgl::MapDebugOptions::StencilClip) {
+                    debug &= ~mbgl::MapDebugOptions::StencilClip;
+                    debug |= mbgl::MapDebugOptions::DepthBuffer;
+                } else if (debug & mbgl::MapDebugOptions::DepthBuffer) {
+                    debug &= ~mbgl::MapDebugOptions::DepthBuffer;
                 } else {
-                    view->map->updateAnnotation(boundAnnotationID, boundAnnotation);
+                    debug |= mbgl::MapDebugOptions::StencilClip;
                 }
-            }
-        } break;
-        case GLFW_KEY_T:
-            view->toggleCustomSource();
-            break;
-        case GLFW_KEY_F: {
-            using namespace mbgl;
-            using namespace mbgl::style;
-            using namespace mbgl::style::expression::dsl;
-
-            auto &style = view->map->getStyle();
-            if (!style.getSource("states")) {
-                std::string url = "https://docs.mapbox.com/mapbox-gl-js/assets/us_states.geojson";
-                auto source = std::make_unique<GeoJSONSource>("states");
-                source->setURL(url);
-                style.addSource(std::move(source));
-
+                view->map->setDebug(debug);
+            } break;
+#endif // MBGL_USE_GLES2
+            case GLFW_KEY_N:
+                if (!mods)
+                    view->map->easeTo(mbgl::CameraOptions().withBearing(0.0),
+                                      mbgl::AnimationOptions{{mbgl::Milliseconds(500)}});
+                break;
+            case GLFW_KEY_Z:
+                view->nextOrientation();
+                break;
+            case GLFW_KEY_Q: {
+                auto result = view->rendererFrontend->getRenderer()->queryPointAnnotations(
+                    {{}, {double(view->getSize().width), double(view->getSize().height)}});
+                printf("visible point annotations: %lu\n", result.size());
+            } break;
+            case GLFW_KEY_P:
+                view->pauseResumeCallback();
+                break;
+            case GLFW_KEY_C:
+                view->clearAnnotations();
+                break;
+            case GLFW_KEY_I:
+                view->resetDatabaseCallback();
+                break;
+            case GLFW_KEY_K:
+                view->addRandomCustomPointAnnotations(1);
+                break;
+            case GLFW_KEY_L:
+                view->addRandomLineAnnotations(1);
+                break;
+            case GLFW_KEY_A: {
+                // XXX Fix precision loss in flyTo:
+                // https://github.com/mapbox/mapbox-gl-native/issues/4298
+                static const std::vector<mbgl::LatLng> places = {
+                    mbgl::LatLng{-16.796665, -179.999983}, // Dateline monument
+                    mbgl::LatLng{12.9810542, 77.6345551},  // Mapbox Bengaluru, India
+                    mbgl::LatLng{-13.15607, -74.21773},    // Mapbox Peru
+                    mbgl::LatLng{37.77572, -122.4158818},  // Mapbox SF, USA
+                    mbgl::LatLng{38.91318, -77.03255},     // Mapbox DC, USA
+                };
+                static size_t nextPlace = 0;
                 mbgl::CameraOptions cameraOptions;
-                cameraOptions.center = mbgl::LatLng{42.619626, -103.523181};
-                cameraOptions.zoom = 3;
-                cameraOptions.pitch = 0;
-                cameraOptions.bearing = 0;
-                view->map->jumpTo(cameraOptions);
-            }
+                cameraOptions.center = places[nextPlace++];
+                cameraOptions.zoom = 20;
+                cameraOptions.pitch = 30;
 
-            auto layer = style.getLayer("state-fills");
-            if (!layer) {
-                auto fillLayer = std::make_unique<FillLayer>("state-fills", "states");
-                fillLayer->setFillColor(mbgl::Color{0.0, 0.0, 1.0, 0.5});
-                fillLayer->setFillOpacity(PropertyExpression<float>(
-                    createExpression(R"(["case", ["boolean", ["feature-state", "hover"], false], 1, 0.5])")));
-                style.addLayer(std::move(fillLayer));
-            } else {
-                layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible
-                                         ? mbgl::style::VisibilityType::None
-                                         : mbgl::style::VisibilityType::Visible);
-            }
+                mbgl::AnimationOptions animationOptions(mbgl::Seconds(10));
+                view->map->flyTo(cameraOptions, animationOptions);
+                nextPlace = nextPlace % places.size();
+            } break;
+            case GLFW_KEY_R: {
+                view->show3DExtrusions = true;
+                view->toggle3DExtrusions(view->show3DExtrusions);
+                if (view->animateRouteCallback) break;
+                view->animateRouteCallback = [](mbgl::Map *routeMap) {
+                    static mapbox::cheap_ruler::CheapRuler ruler{40.7}; // New York
+                    static mapbox::geojson::geojson route{mapbox::geojson::parse(mbgl::platform::glfw::route)};
+                    const auto &geometry = route.get<mapbox::geometry::geometry<double>>();
+                    const auto &lineString = geometry.get<mapbox::geometry::line_string<double>>();
 
-            layer = style.getLayer("state-borders");
-            if (!layer) {
-                auto borderLayer = std::make_unique<LineLayer>("state-borders", "states");
-                borderLayer->setLineColor(mbgl::Color{0.0, 0.0, 1.0, 1.0});
-                borderLayer->setLineWidth(PropertyExpression<float>(
-                    createExpression(R"(["case", ["boolean", ["feature-state", "hover"], false], 2, 1])")));
-                style.addLayer(std::move(borderLayer));
-            } else {
-                layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible
-                                         ? mbgl::style::VisibilityType::None
-                                         : mbgl::style::VisibilityType::Visible);
-            }
-        } break;
-        case GLFW_KEY_F1: {
-            bool success = TestWriter()
-                               .withInitialSize(mbgl::Size(view->width, view->height))
-                               .withStyle(view->map->getStyle())
-                               .withCameraOptions(view->map->getCameraOptions())
-                               .write(view->testDirectory);
+                    static double routeDistance = ruler.lineDistance(lineString);
+                    static double routeProgress = 0;
+                    routeProgress += 0.0005;
+                    if (routeProgress > 1.0) {
+                        routeProgress = 0.0;
+                    }
 
-            if (success) {
-                mbgl::Log::Info(mbgl::Event::General, "Render test created!");
-            } else {
-                mbgl::Log::Error(mbgl::Event::General,
-                                 "Fail to create render test! Base directory does not exist or permission denied.");
-            }
-        } break;
+                    auto camera = routeMap->getCameraOptions();
+
+                    auto point = ruler.along(lineString, routeProgress * routeDistance);
+                    const mbgl::LatLng center{point.y, point.x};
+                    auto latLng = *camera.center;
+                    double bearing = ruler.bearing({latLng.longitude(), latLng.latitude()}, point);
+                    double easing = bearing - *camera.bearing;
+                    easing += easing > 180.0 ? -360.0 : easing < -180 ? 360.0 : 0;
+                    bearing = *camera.bearing + (easing / 20);
+                    routeMap->jumpTo(
+                        mbgl::CameraOptions().withCenter(center).withZoom(18.0).withBearing(bearing).withPitch(60.0));
+                };
+                view->animateRouteCallback(view->map);
+            } break;
+            case GLFW_KEY_E:
+                view->toggle3DExtrusions(!view->show3DExtrusions);
+                break;
+            case GLFW_KEY_D: {
+                static const std::vector<mbgl::LatLngBounds> bounds = {
+                    mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, -170.0}, mbgl::LatLng{45.0, 170.0}),  // inside
+                    mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, -200.0}, mbgl::LatLng{45.0, -160.0}), // left IDL
+                    mbgl::LatLngBounds::hull(mbgl::LatLng{-45.0, 160.0}, mbgl::LatLng{45.0, 200.0}),   // right IDL
+                    mbgl::LatLngBounds()};
+                static size_t nextBound = 0u;
+                static mbgl::AnnotationID boundAnnotationID = std::numeric_limits<mbgl::AnnotationID>::max();
+
+                mbgl::LatLngBounds bound = bounds[nextBound++];
+                nextBound = nextBound % bounds.size();
+
+                view->map->setBounds(mbgl::BoundOptions().withLatLngBounds(bound));
+
+                if (bound == mbgl::LatLngBounds()) {
+                    view->map->removeAnnotation(boundAnnotationID);
+                    boundAnnotationID = std::numeric_limits<mbgl::AnnotationID>::max();
+                } else {
+                    mbgl::Polygon<double> rect;
+                    rect.push_back({
+                        mbgl::Point<double>{bound.west(), bound.north()},
+                        mbgl::Point<double>{bound.east(), bound.north()},
+                        mbgl::Point<double>{bound.east(), bound.south()},
+                        mbgl::Point<double>{bound.west(), bound.south()},
+                    });
+
+                    auto boundAnnotation =
+                        mbgl::FillAnnotation{rect, 0.5f, {view->makeRandomColor()}, {view->makeRandomColor()}};
+
+                    if (boundAnnotationID == std::numeric_limits<mbgl::AnnotationID>::max()) {
+                        boundAnnotationID = view->map->addAnnotation(boundAnnotation);
+                    } else {
+                        view->map->updateAnnotation(boundAnnotationID, boundAnnotation);
+                    }
+                }
+            } break;
+            case GLFW_KEY_T:
+                view->toggleCustomSource();
+                break;
+            case GLFW_KEY_F: {
+                using namespace mbgl;
+                using namespace mbgl::style;
+                using namespace mbgl::style::expression::dsl;
+
+                auto &style = view->map->getStyle();
+                if (!style.getSource("states")) {
+                    std::string url = "https://docs.mapbox.com/mapbox-gl-js/assets/us_states.geojson";
+                    auto source = std::make_unique<GeoJSONSource>("states");
+                    source->setURL(url);
+                    style.addSource(std::move(source));
+
+                    mbgl::CameraOptions cameraOptions;
+                    cameraOptions.center = mbgl::LatLng{42.619626, -103.523181};
+                    cameraOptions.zoom = 3;
+                    cameraOptions.pitch = 0;
+                    cameraOptions.bearing = 0;
+                    view->map->jumpTo(cameraOptions);
+                }
+
+                auto layer = style.getLayer("state-fills");
+                if (!layer) {
+                    auto fillLayer = std::make_unique<FillLayer>("state-fills", "states");
+                    fillLayer->setFillColor(mbgl::Color{0.0, 0.0, 1.0, 0.5});
+                    fillLayer->setFillOpacity(PropertyExpression<float>(
+                        createExpression(R"(["case", ["boolean", ["feature-state", "hover"], false], 1, 0.5])")));
+                    style.addLayer(std::move(fillLayer));
+                } else {
+                    layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible
+                                             ? mbgl::style::VisibilityType::None
+                                             : mbgl::style::VisibilityType::Visible);
+                }
+
+                layer = style.getLayer("state-borders");
+                if (!layer) {
+                    auto borderLayer = std::make_unique<LineLayer>("state-borders", "states");
+                    borderLayer->setLineColor(mbgl::Color{0.0, 0.0, 1.0, 1.0});
+                    borderLayer->setLineWidth(PropertyExpression<float>(
+                        createExpression(R"(["case", ["boolean", ["feature-state", "hover"], false], 2, 1])")));
+                    style.addLayer(std::move(borderLayer));
+                } else {
+                    layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible
+                                             ? mbgl::style::VisibilityType::None
+                                             : mbgl::style::VisibilityType::Visible);
+                }
+            } break;
+            case GLFW_KEY_F1: {
+                bool success = TestWriter()
+                                   .withInitialSize(mbgl::Size(view->width, view->height))
+                                   .withStyle(view->map->getStyle())
+                                   .withCameraOptions(view->map->getCameraOptions())
+                                   .write(view->testDirectory);
+
+                if (success) {
+                    mbgl::Log::Info(mbgl::Event::General, "Render test created!");
+                } else {
+                    mbgl::Log::Error(mbgl::Event::General,
+                                     "Fail to create render test! Base directory does not exist or permission denied.");
+                }
+            } break;
+            case GLFW_KEY_G: {
+                using namespace mbgl::style;
+                using namespace mbgl::style::conversion;
+                using namespace mbgl::style::expression::dsl;
+
+                auto source = std::make_unique<GeoJSONSource>("polygon");
+
+                // Add new paint properties to the layer "country-label" that need to highlight country labels that are
+                // inside the polygon
+                static const std::string geoSource = R"data(
+                {
+                  "type": "Polygon",
+                  "coordinates": [
+                    [
+                      [
+                        -29.8828125,
+                        60.413852350464914
+                      ],
+                      [
+                        31.9921875,
+                        60.413852350464914
+                      ],
+                      [
+                        31.9921875,
+                        67.7427590666639
+                      ],
+                      [
+                        -29.8828125,
+                        67.7427590666639
+                      ],
+                      [
+                        -29.8828125,
+                        60.413852350464914
+                      ]
+                    ]
+                  ]
+                    })data";
+
+                static const std::string line = R"(
+                  {
+                    "type": "LineString",
+                    "coordinates": [
+                      [
+                        24.734129905700684,
+                        60.16301307713581
+                      ],
+                      [
+                        24.74142551422119,
+                        60.16459307564559
+                      ],
+                      [
+                        24.750137329101562,
+                        60.166108948753305
+                      ],
+                      [
+                        24.757862091064453,
+                        60.166365145750525
+                      ],
+                      [
+                        24.769535064697266,
+                        60.16764610077336
+                      ],
+                      [
+                        24.77837562561035,
+                        60.168286559558055
+                      ],
+                      [
+                        24.794082641601562,
+                        60.16850004304534
+                      ],
+                      [
+                        24.808931350708004,
+                        60.16956743967486
+                      ],
+                      [
+                        24.82137680053711,
+                        60.16948204922065
+                      ],
+                      [
+                        24.840259552001953,
+                        60.16679213630683
+                      ],
+                      [
+                        24.858455657958984,
+                        60.163205243174495
+                      ],
+                      [
+                        24.86480712890625,
+                        60.162521981042794
+                      ],
+                      [
+                        24.877853393554688,
+                        60.164230109736266
+                      ],
+                      [
+                        24.88866806030273,
+                        60.16585274975855
+                      ],
+                      [
+                        24.903430938720703,
+                        60.16721912131444
+                      ],
+                      [
+                        24.91321563720703,
+                        60.16474253103123
+                      ],
+                      [
+                        24.921627044677734,
+                        60.1647852324451
+                      ],
+                      [
+                        24.925060272216797,
+                        60.16482793380353
+                      ],
+                      [
+                        24.929695129394528,
+                        60.16623704750161
+                      ],
+                      [
+                        24.93124008178711,
+                        60.167475309655636
+                      ],
+                      [
+                        24.93424415588379,
+                        60.16824386269413
+                      ],
+                      [
+                        24.939479827880856,
+                        60.169994388616885
+                      ],
+                      [
+                        24.952354431152344,
+                        60.174306261926034
+                      ]
+                    ]
+                  })";
+                
+                const std::string shortLine = R"( {
+                       "type": "LineString",
+                       "coordinates": [
+                         [
+                           -16.083984375,
+                           -1.5818302639606454
+                         ],
+                         [
+                           -8.701171874999998,
+                           -4.039617826768424
+                         ],
+                         [
+                           -3.69140625,
+                           -5.0909441750333855
+                         ],
+                         [
+                           -2.63671875,
+                           -9.362352822055593
+                         ],
+                         [
+                           1.40625,
+                           -12.382928338487396
+                         ],
+                         [
+                           -2.021484375,
+                           -12.382928338487396
+                         ],
+                         [
+                           -5.361328125,
+                           -14.00869637063467
+                         ],
+                         [
+                           -10.72265625,
+                           -12.897489183755892
+                         ],
+                         [
+                           -10.72265625,
+                           -8.49410453755187
+                         ],
+                         [
+                           -17.666015625,
+                           -8.233237111274553
+                         ]
+                       ]
+                })";
+               
+                static mapbox::geojson::geojson route{mapbox::geojson::parse(line)};
+                const auto &geometry = route.get<mapbox::geometry::geometry<double>>();
+//                const auto &lineString = geometry.get<mapbox::geometry::line_string<double>>();
+
+                const auto geojson = mbgl::GeometryBuffer(geometry, 500.0, 10).getJsonBuffer();
+                const std::string polygonSource("/Users/miaozhao/Work/MacOs/polygon.geojson");
+                mbgl::GeometryBuffer::writeGeoJson(polygonSource, geojson);
+                
+                auto s1 = std::make_unique<GeoJSONSource>("polygon");
+                s1->setGeoJSON(mapbox::geojson::parse(geojson));
+                view->map->getStyle().addSource(std::move(s1));
+
+                auto s2 = std::make_unique<GeoJSONSource>("line");
+               s2->setGeoJSON(route);
+               view->map->getStyle().addSource(std::move(s2));
+                
+                auto fillLayer = std::make_unique<mbgl::style::FillLayer>("fill", "polygon");
+                fillLayer->setFillColor(mbgl::Color::black());
+                fillLayer->setFillOpacity(0.1);
+                view->map->getStyle().addLayer(std::move(fillLayer));
+                
+                auto lineLayer = std::make_unique<mbgl::style::LineLayer>("line", "line");
+                lineLayer->setLineColor(mbgl::Color::red());
+                view->map->getStyle().addLayer(std::move(lineLayer));
+                
+                auto &style = view->map->getStyle();
+                auto labelLayer = style.getLayer("poi-label");
+                if (labelLayer) {
+//                    labelLayer->getProperty("text-opacity");
+                    auto symbolLayer = static_cast<mbgl::style::SymbolLayer *>(labelLayer);
+//                    std::stringstream ss;
+//                    ss << std::string(R"(["case", ["within", )") << geojson << std::string(R"( ], "red", "blue"] )");
+//                    auto expr = createExpression(ss.str().c_str());
+//                    if (expr) {
+//                        symbolLayer->setTextColor(PropertyExpression<mbgl::Color>(std::move(expr)));
+//                    }
+                    std::stringstream ss;
+                    ss << std::string(R"(["within", )") << geojson << std::string(R"( ])");
+                    auto expr = createExpression(ss.str().c_str());
+                    if (expr) {
+                        symbolLayer->setFilter(Filter(std::move(expr)));
+                    }
+                }
+                
+
+//                if (labelLayer) {
+//                    auto symbolLayer = static_cast<mbgl::style::SymbolLayer *>(labelLayer);
+//                    std::stringstream ss;
+//                    ss << std::string(R"(["within", )") << geoSource << std::string(R"( ])");
+//                    auto expr = createExpression(ss.str().c_str());
+//                    if (expr) {
+//                        symbolLayer->setFilter(Filter(std::move(expr)));
+//                    }
+//                }
+//                auto layer = style.getLayer("circle-label");
+//                if (layer) {
+////                    labelLayer->getCircleColor();
+//                    auto circleLayer = static_cast<mbgl::style::CircleLayer *>(layer);
+//                    std::stringstream ss;
+//                    ss << std::string(R"(["case", ["within", )") << geoSource << std::string(R"a( ], ["rgb", 153, 128, 250], ["rgb", 249, 138,175]])a");
+//                    //                    ss << std::string(R"( ["within", )") << geoSource
+//                    //                    << std::string(R"( ] )");
+//                    auto expr = createExpression(ss.str().c_str());
+//                    if (expr) {
+//                        circleLayer->setCircleColor(PropertyExpression<mbgl::Color>(std::move(expr)));
+//                    }
+//                }
+//                 if (layer) {
+//                    auto circleLayer = static_cast<mbgl::style::CircleLayer *>(layer);
+//                    std::stringstream ss;
+//                    ss << std::string(R"(["within", )") << geojson << std::string(R"( ])");
+//                    auto expr = createExpression(ss.str().c_str());
+//                    if (expr) {
+//                        circleLayer->setFilter(Filter(std::move(expr)));
+//                    }
+//                }
+            } break;
         }
     }
 
     if (action == GLFW_RELEASE || action == GLFW_REPEAT) {
         switch (key) {
-        case GLFW_KEY_W: view->popAnnotation(); break;
-        case GLFW_KEY_1: view->addRandomPointAnnotations(1); break;
-        case GLFW_KEY_2: view->addRandomPointAnnotations(10); break;
-        case GLFW_KEY_3: view->addRandomPointAnnotations(100); break;
-        case GLFW_KEY_4: view->addRandomPointAnnotations(1000); break;
-        case GLFW_KEY_5: view->addRandomPointAnnotations(10000); break;
-        case GLFW_KEY_6: view->addRandomPointAnnotations(100000); break;
-        case GLFW_KEY_7: view->addRandomShapeAnnotations(1); break;
-        case GLFW_KEY_8: view->addRandomShapeAnnotations(10); break;
-        case GLFW_KEY_9: view->addRandomShapeAnnotations(100); break;
-        case GLFW_KEY_0: view->addRandomShapeAnnotations(1000); break;
-        case GLFW_KEY_M: view->addAnimatedAnnotation(); break;
+            case GLFW_KEY_W:
+                view->popAnnotation();
+                break;
+            case GLFW_KEY_1:
+                view->addRandomPointAnnotations(1);
+                break;
+            case GLFW_KEY_2:
+                view->addRandomPointAnnotations(10);
+                break;
+            case GLFW_KEY_3:
+                view->addRandomPointAnnotations(100);
+                break;
+            case GLFW_KEY_4:
+                view->addRandomPointAnnotations(1000);
+                break;
+            case GLFW_KEY_5:
+                view->addRandomPointAnnotations(10000);
+                break;
+            case GLFW_KEY_6:
+                view->addRandomPointAnnotations(100000);
+                break;
+            case GLFW_KEY_7:
+                view->addRandomShapeAnnotations(1);
+                break;
+            case GLFW_KEY_8:
+                view->addRandomShapeAnnotations(10);
+                break;
+            case GLFW_KEY_9:
+                view->addRandomShapeAnnotations(100);
+                break;
+            case GLFW_KEY_0:
+                view->addRandomShapeAnnotations(1000);
+                break;
+            case GLFW_KEY_M:
+                view->addAnimatedAnnotation();
+                break;
         }
     }
 }
@@ -413,18 +718,20 @@ mbgl::Color GLFWView::makeRandomColor() const {
     const float r = 1.0f * (float(std::rand()) / RAND_MAX);
     const float g = 1.0f * (float(std::rand()) / RAND_MAX);
     const float b = 1.0f * (float(std::rand()) / RAND_MAX);
-    return { r, g, b, 1.0f };
+    return {r, g, b, 1.0f};
 }
 
 mbgl::Point<double> GLFWView::makeRandomPoint() const {
     const double x = width * double(std::rand()) / RAND_MAX;
     const double y = height * double(std::rand()) / RAND_MAX;
-    mbgl::LatLng latLng = map->latLngForPixel({ x, y });
-    return { latLng.longitude(), latLng.latitude() };
+    mbgl::LatLng latLng = map->latLngForPixel({x, y});
+    return {latLng.longitude(), latLng.latitude()};
 }
 
-std::unique_ptr<mbgl::style::Image>
-GLFWView::makeImage(const std::string& id, int width, int height, float pixelRatio) {
+std::unique_ptr<mbgl::style::Image> GLFWView::makeImage(const std::string &id,
+                                                        int width,
+                                                        int height,
+                                                        float pixelRatio) {
     const int r = 255 * (double(std::rand()) / RAND_MAX);
     const int g = 255 * (double(std::rand()) / RAND_MAX);
     const int b = 255 * (double(std::rand()) / RAND_MAX);
@@ -432,8 +739,8 @@ GLFWView::makeImage(const std::string& id, int width, int height, float pixelRat
     const int w = std::ceil(pixelRatio * width);
     const int h = std::ceil(pixelRatio * height);
 
-    mbgl::PremultipliedImage image({ static_cast<uint32_t>(w), static_cast<uint32_t>(h) });
-    auto data = reinterpret_cast<uint32_t*>(image.data.get());
+    mbgl::PremultipliedImage image({static_cast<uint32_t>(w), static_cast<uint32_t>(h)});
+    auto data = reinterpret_cast<uint32_t *>(image.data.get());
     const int dist = (w / 2) * (w / 2);
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -443,8 +750,7 @@ GLFWView::makeImage(const std::string& id, int width, int height, float pixelRat
             if (diff > 0) {
                 const int a = std::min(0xFF, diff) * 0xFF / dist;
                 // Premultiply the rgb values with alpha
-                data[w * y + x] =
-                    (a << 24) | ((a * r / 0xFF) << 16) | ((a * g / 0xFF) << 8) | (a * b / 0xFF);
+                data[w * y + x] = (a << 24) | ((a * r / 0xFF) << 16) | ((a * g / 0xFF) << 8) | (a * b / 0xFF);
             }
         }
     }
@@ -455,26 +761,34 @@ GLFWView::makeImage(const std::string& id, int width, int height, float pixelRat
 void GLFWView::nextOrientation() {
     using NO = mbgl::NorthOrientation;
     switch (map->getMapOptions().northOrientation()) {
-        case NO::Upwards: map->setNorthOrientation(NO::Rightwards); break;
-        case NO::Rightwards: map->setNorthOrientation(NO::Downwards); break;
-        case NO::Downwards: map->setNorthOrientation(NO::Leftwards); break;
-        default: map->setNorthOrientation(NO::Upwards); break;
+        case NO::Upwards:
+            map->setNorthOrientation(NO::Rightwards);
+            break;
+        case NO::Rightwards:
+            map->setNorthOrientation(NO::Downwards);
+            break;
+        case NO::Downwards:
+            map->setNorthOrientation(NO::Leftwards);
+            break;
+        default:
+            map->setNorthOrientation(NO::Upwards);
+            break;
     }
 }
 
 void GLFWView::addRandomCustomPointAnnotations(int count) {
     for (int i = 0; i < count; i++) {
         static int spriteID = 1;
-        const auto name = std::string{ "marker-" } + mbgl::util::toString(spriteID++);
+        const auto name = std::string{"marker-"} + mbgl::util::toString(spriteID++);
         map->addAnnotationImage(makeImage(name, 22, 22, 1));
         spriteIDs.push_back(name);
-        annotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation { makeRandomPoint(), name }));
+        annotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation{makeRandomPoint(), name}));
     }
 }
 
 void GLFWView::addRandomPointAnnotations(int count) {
     for (int i = 0; i < count; ++i) {
-        annotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation { makeRandomPoint(), "default_marker" }));
+        annotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation{makeRandomPoint(), "default_marker"}));
     }
 }
 
@@ -484,21 +798,22 @@ void GLFWView::addRandomLineAnnotations(int count) {
         for (int j = 0; j < 3; ++j) {
             lineString.push_back(makeRandomPoint());
         }
-        annotationIDs.push_back(map->addAnnotation(mbgl::LineAnnotation { lineString, 1.0f, 2.0f, { makeRandomColor() } }));
+        annotationIDs.push_back(map->addAnnotation(mbgl::LineAnnotation{lineString, 1.0f, 2.0f, {makeRandomColor()}}));
     }
 }
 
 void GLFWView::addRandomShapeAnnotations(int count) {
     for (int i = 0; i < count; ++i) {
         mbgl::Polygon<double> triangle;
-        triangle.push_back({ makeRandomPoint(), makeRandomPoint(), makeRandomPoint() });
-        annotationIDs.push_back(map->addAnnotation(mbgl::FillAnnotation { triangle, 0.5f, { makeRandomColor() }, { makeRandomColor() } }));
+        triangle.push_back({makeRandomPoint(), makeRandomPoint(), makeRandomPoint()});
+        annotationIDs.push_back(
+            map->addAnnotation(mbgl::FillAnnotation{triangle, 0.5f, {makeRandomColor()}, {makeRandomColor()}}));
     }
 }
 
 void GLFWView::addAnimatedAnnotation() {
     const double started = glfwGetTime();
-    animatedAnnotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation { { 0, 0 } , "default_marker" }));
+    animatedAnnotationIDs.push_back(map->addAnnotation(mbgl::SymbolAnnotation{{0, 0}, "default_marker"}));
     animatedAnnotationAddedTimes.push_back(started);
 }
 
@@ -509,8 +824,8 @@ void GLFWView::updateAnimatedAnnotations() {
 
         const double period = 10;
         const double x = dt / period * 360 - 180;
-        const double y = std::sin(dt/ period * M_PI * 2.0) * 80;
-        map->updateAnnotation(animatedAnnotationIDs[i], mbgl::SymbolAnnotation { {x, y }, "default_marker" });
+        const double y = std::sin(dt / period * M_PI * 2.0) * 80;
+        map->updateAnnotation(animatedAnnotationIDs[i], mbgl::SymbolAnnotation{{x, y}, "default_marker"});
     }
 }
 
@@ -539,13 +854,13 @@ void GLFWView::cycleDebugOptions() {
 }
 
 void GLFWView::clearAnnotations() {
-    for (const auto& id : annotationIDs) {
+    for (const auto &id : annotationIDs) {
         map->removeAnnotation(id);
     }
 
     annotationIDs.clear();
 
-    for (const auto& id : animatedAnnotationIDs) {
+    for (const auto &id : animatedAnnotationIDs) {
         map->removeAnnotation(id);
     }
 
@@ -580,19 +895,19 @@ void GLFWView::onScroll(GLFWwindow *window, double /*xOffset*/, double yOffset) 
         scale = 1.0 / scale;
     }
 
-    view->map->scaleBy(scale, mbgl::ScreenCoordinate { view->lastX, view->lastY });
+    view->map->scaleBy(scale, mbgl::ScreenCoordinate{view->lastX, view->lastY});
 }
 
 void GLFWView::onWindowResize(GLFWwindow *window, int width, int height) {
     auto *view = reinterpret_cast<GLFWView *>(glfwGetWindowUserPointer(window));
     view->width = width;
     view->height = height;
-    view->map->setSize({ static_cast<uint32_t>(view->width), static_cast<uint32_t>(view->height) });
+    view->map->setSize({static_cast<uint32_t>(view->width), static_cast<uint32_t>(view->height)});
 }
 
 void GLFWView::onFramebufferResize(GLFWwindow *window, int width, int height) {
     auto *view = reinterpret_cast<GLFWView *>(glfwGetWindowUserPointer(window));
-    view->backend->setSize({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
+    view->backend->setSize({static_cast<uint32_t>(width), static_cast<uint32_t>(height)});
 
     // This is only triggered when the framebuffer is resized, but not the window. It can
     // happen when you move the window between screens with a different pixel ratio.
@@ -604,8 +919,7 @@ void GLFWView::onFramebufferResize(GLFWwindow *window, int width, int height) {
 void GLFWView::onMouseClick(GLFWwindow *window, int button, int action, int modifiers) {
     auto *view = reinterpret_cast<GLFWView *>(glfwGetWindowUserPointer(window));
 
-    if (button == GLFW_MOUSE_BUTTON_RIGHT ||
-        (button == GLFW_MOUSE_BUTTON_LEFT && modifiers & GLFW_MOD_CONTROL)) {
+    if (button == GLFW_MOUSE_BUTTON_RIGHT || (button == GLFW_MOUSE_BUTTON_LEFT && modifiers & GLFW_MOD_CONTROL)) {
         view->rotating = action == GLFW_PRESS;
         view->map->setGestureInProgress(view->rotating);
     } else if (button == GLFW_MOUSE_BUTTON_LEFT && (modifiers & GLFW_MOD_SHIFT)) {
@@ -619,9 +933,13 @@ void GLFWView::onMouseClick(GLFWwindow *window, int button, int action, int modi
             double now = glfwGetTime();
             if (now - view->lastClick < 0.4 /* ms */) {
                 if (modifiers & GLFW_MOD_SHIFT) {
-                    view->map->scaleBy(0.5, mbgl::ScreenCoordinate { view->lastX, view->lastY }, mbgl::AnimationOptions{{mbgl::Milliseconds(500)}});
+                    view->map->scaleBy(0.5,
+                                       mbgl::ScreenCoordinate{view->lastX, view->lastY},
+                                       mbgl::AnimationOptions{{mbgl::Milliseconds(500)}});
                 } else {
-                    view->map->scaleBy(2.0, mbgl::ScreenCoordinate { view->lastX, view->lastY }, mbgl::AnimationOptions{{mbgl::Milliseconds(500)}});
+                    view->map->scaleBy(2.0,
+                                       mbgl::ScreenCoordinate{view->lastX, view->lastY},
+                                       mbgl::AnimationOptions{{mbgl::Milliseconds(500)}});
                 }
             }
             view->lastClick = now;
@@ -635,10 +953,10 @@ void GLFWView::onMouseMove(GLFWwindow *window, double x, double y) {
         const double dx = x - view->lastX;
         const double dy = y - view->lastY;
         if (dx || dy) {
-            view->map->moveBy(mbgl::ScreenCoordinate { dx, dy });
+            view->map->moveBy(mbgl::ScreenCoordinate{dx, dy});
         }
     } else if (view->rotating) {
-        view->map->rotateBy({ view->lastX, view->lastY }, { x, y });
+        view->map->rotateBy({view->lastX, view->lastY}, {x, y});
     } else if (view->pitching) {
         const double dy = y - view->lastY;
         if (dy) {
@@ -704,12 +1022,11 @@ void GLFWView::run() {
             dirty = false;
             const double started = glfwGetTime();
 
-            if (animateRouteCallback)
-                animateRouteCallback(map);
+            if (animateRouteCallback) animateRouteCallback(map);
 
             updateAnimatedAnnotations();
 
-            mbgl::gfx::BackendScope scope { backend->getRendererBackend() };
+            mbgl::gfx::BackendScope scope{backend->getRendererBackend()};
 
             rendererFrontend->render();
 
@@ -717,7 +1034,6 @@ void GLFWView::run() {
             if (benchmark) {
                 invalidate();
             }
-
         }
     };
 
@@ -734,7 +1050,7 @@ float GLFWView::getPixelRatio() const {
 }
 
 mbgl::Size GLFWView::getSize() const {
-    return { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+    return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
 }
 
 void GLFWView::invalidate() {
@@ -749,8 +1065,7 @@ void GLFWView::report(float duration) {
     const double currentTime = glfwGetTime();
     if (currentTime - lastReported >= 1) {
         frameTime /= frames;
-        mbgl::Log::Info(mbgl::Event::OpenGL, "Frame time: %6.2fms (%6.2f fps)", frameTime,
-            1000 / frameTime);
+        mbgl::Log::Info(mbgl::Event::OpenGL, "Frame time: %6.2fms (%6.2f fps)", frameTime, 1000 / frameTime);
         frames = 0;
         frameTime = 0;
         lastReported = currentTime;
@@ -766,8 +1081,8 @@ void GLFWView::setShouldClose() {
     glfwPostEmptyEvent();
 }
 
-void GLFWView::setWindowTitle(const std::string& title) {
-    glfwSetWindowTitle(window, (std::string { "Mapbox GL: " } + title).c_str());
+void GLFWView::setWindowTitle(const std::string &title) {
+    glfwSetWindowTitle(window, (std::string{"Mapbox GL: "} + title).c_str());
 }
 
 void GLFWView::onDidFinishLoadingStyle() {
@@ -796,11 +1111,14 @@ void GLFWView::toggle3DExtrusions(bool visible) {
     extrusionLayer->setSourceLayer("building");
     extrusionLayer->setMinZoom(15.0f);
     extrusionLayer->setFilter(Filter(eq(get("extrude"), literal("true"))));
-    extrusionLayer->setFillExtrusionColor(PropertyExpression<mbgl::Color>(
-        interpolate(linear(), number(get("height")),
-                    0.f, toColor(literal("#160e23")),
-                    50.f, toColor(literal("#00615f")),
-                    100.f, toColor(literal("#55e9ff")))));
+    extrusionLayer->setFillExtrusionColor(PropertyExpression<mbgl::Color>(interpolate(linear(),
+                                                                                      number(get("height")),
+                                                                                      0.f,
+                                                                                      toColor(literal("#160e23")),
+                                                                                      50.f,
+                                                                                      toColor(literal("#00615f")),
+                                                                                      100.f,
+                                                                                      toColor(literal("#55e9ff")))));
     extrusionLayer->setFillExtrusionOpacity(0.6f);
     extrusionLayer->setFillExtrusionHeight(PropertyExpression<float>(get("height")));
     extrusionLayer->setFillExtrusionBase(PropertyExpression<float>(get("min_height")));
@@ -811,13 +1129,14 @@ void GLFWView::toggle3DExtrusions(bool visible) {
 void GLFWView::toggleCustomSource() {
     if (!map->getStyle().getSource("custom")) {
         mbgl::style::CustomGeometrySource::Options options;
-        options.cancelTileFunction = [](const mbgl::CanonicalTileID&) {};
-        options.fetchTileFunction = [&](const mbgl::CanonicalTileID& tileID) {
+        options.cancelTileFunction = [](const mbgl::CanonicalTileID &) {};
+        options.fetchTileFunction = [&](const mbgl::CanonicalTileID &tileID) {
             double gridSpacing = 0.1;
             mbgl::FeatureCollection features;
             const mbgl::LatLngBounds bounds(tileID);
-            for (double y = ceil(bounds.north() / gridSpacing) * gridSpacing; y >= floor(bounds.south() / gridSpacing) * gridSpacing; y -= gridSpacing) {
-
+            for (double y = ceil(bounds.north() / gridSpacing) * gridSpacing;
+                 y >= floor(bounds.south() / gridSpacing) * gridSpacing;
+                 y -= gridSpacing) {
                 mapbox::geojson::line_string gridLine;
                 gridLine.emplace_back(bounds.west(), y);
                 gridLine.emplace_back(bounds.east(), y);
@@ -825,7 +1144,9 @@ void GLFWView::toggleCustomSource() {
                 features.emplace_back(gridLine);
             }
 
-            for (double x = floor(bounds.west() / gridSpacing) * gridSpacing; x <= ceil(bounds.east() / gridSpacing) * gridSpacing; x += gridSpacing) {
+            for (double x = floor(bounds.west() / gridSpacing) * gridSpacing;
+                 x <= ceil(bounds.east() / gridSpacing) * gridSpacing;
+                 x += gridSpacing) {
                 mapbox::geojson::line_string gridLine;
                 gridLine.emplace_back(x, bounds.south());
                 gridLine.emplace_back(x, bounds.north());
@@ -841,14 +1162,15 @@ void GLFWView::toggleCustomSource() {
         map->getStyle().addSource(std::make_unique<mbgl::style::CustomGeometrySource>("custom", options));
     }
 
-    auto* layer = map->getStyle().getLayer("grid");
+    auto *layer = map->getStyle().getLayer("grid");
 
     if (!layer) {
         auto lineLayer = std::make_unique<mbgl::style::LineLayer>("grid", "custom");
-        lineLayer->setLineColor(mbgl::Color{ 1.0, 0.0, 0.0, 1.0 });
+        lineLayer->setLineColor(mbgl::Color{1.0, 0.0, 0.0, 1.0});
         map->getStyle().addLayer(std::move(lineLayer));
     } else {
-        layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible ?
-                             mbgl::style::VisibilityType::None : mbgl::style::VisibilityType::Visible);
+        layer->setVisibility(layer->getVisibility() == mbgl::style::VisibilityType::Visible
+                                 ? mbgl::style::VisibilityType::None
+                                 : mbgl::style::VisibilityType::Visible);
     }
 }
