@@ -2,6 +2,7 @@
 #include "glfw_backend.hpp"
 #include "glfw_renderer_frontend.hpp"
 #include "ny_route.hpp"
+#include "helsinki_route.hpp"
 #include "test_writer.hpp"
 
 #include <mbgl/annotation/annotation.hpp>
@@ -28,22 +29,10 @@
 #include <mbgl/util/geometry_buffer.hpp>
 
 #include <mapbox/cheap_ruler.hpp>
-#include <mapbox/geojson.hpp>
 #include <mapbox/geometry.hpp>
+#include <mapbox/geojson.hpp>
 
 #include <sstream>
-
-#include <boost/geometry.hpp>
-#include <boost/geometry/geometries/point_xy.hpp>
-#include <boost/geometry/geometries/geometries.hpp>
-
-#include <mbgl/util/variant.hpp>
-#include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/prettywriter.h>
-#include <rapidjson/rapidjson.h>
-#include <rapidjson/error/en.h>
-#include <mapbox/geojson_impl.hpp>
 
 #if MBGL_USE_GLES2
 #define GLFW_INCLUDE_ES2
@@ -413,221 +402,51 @@ void GLFWView::onKey(GLFWwindow *window, int key, int /*scancode*/, int action, 
                 using namespace mbgl::style;
                 using namespace mbgl::style::conversion;
                 using namespace mbgl::style::expression::dsl;
-
-                auto source = std::make_unique<GeoJSONSource>("polygon");
-
                 // Add new paint properties to the layer "country-label" that need to highlight country labels that are
                 // inside the polygon
-                static const std::string geoSource = R"data(
-                {
-                  "type": "Polygon",
-                  "coordinates": [
-                    [
-                      [
-                        -29.8828125,
-                        60.413852350464914
-                      ],
-                      [
-                        31.9921875,
-                        60.413852350464914
-                      ],
-                      [
-                        31.9921875,
-                        67.7427590666639
-                      ],
-                      [
-                        -29.8828125,
-                        67.7427590666639
-                      ],
-                      [
-                        -29.8828125,
-                        60.413852350464914
-                      ]
-                    ]
-                  ]
-                    })data";
-
-                static const std::string line = R"(
-                  {
-                    "type": "LineString",
-                    "coordinates": [
-                      [
-                        24.734129905700684,
-                        60.16301307713581
-                      ],
-                      [
-                        24.74142551422119,
-                        60.16459307564559
-                      ],
-                      [
-                        24.750137329101562,
-                        60.166108948753305
-                      ],
-                      [
-                        24.757862091064453,
-                        60.166365145750525
-                      ],
-                      [
-                        24.769535064697266,
-                        60.16764610077336
-                      ],
-                      [
-                        24.77837562561035,
-                        60.168286559558055
-                      ],
-                      [
-                        24.794082641601562,
-                        60.16850004304534
-                      ],
-                      [
-                        24.808931350708004,
-                        60.16956743967486
-                      ],
-                      [
-                        24.82137680053711,
-                        60.16948204922065
-                      ],
-                      [
-                        24.840259552001953,
-                        60.16679213630683
-                      ],
-                      [
-                        24.858455657958984,
-                        60.163205243174495
-                      ],
-                      [
-                        24.86480712890625,
-                        60.162521981042794
-                      ],
-                      [
-                        24.877853393554688,
-                        60.164230109736266
-                      ],
-                      [
-                        24.88866806030273,
-                        60.16585274975855
-                      ],
-                      [
-                        24.903430938720703,
-                        60.16721912131444
-                      ],
-                      [
-                        24.91321563720703,
-                        60.16474253103123
-                      ],
-                      [
-                        24.921627044677734,
-                        60.1647852324451
-                      ],
-                      [
-                        24.925060272216797,
-                        60.16482793380353
-                      ],
-                      [
-                        24.929695129394528,
-                        60.16623704750161
-                      ],
-                      [
-                        24.93124008178711,
-                        60.167475309655636
-                      ],
-                      [
-                        24.93424415588379,
-                        60.16824386269413
-                      ],
-                      [
-                        24.939479827880856,
-                        60.169994388616885
-                      ],
-                      [
-                        24.952354431152344,
-                        60.174306261926034
-                      ]
-                    ]
-                  })";
+                static mapbox::geojson::geojson route{mapbox::geojson::parse(mbgl::platform::glfw::helsinkiRoute)};
+                const auto& geometry = route.match(
+                         [](const mapbox::geometry::geometry<double>& geometrySet) {
+                            return mbgl::Feature(geometrySet).geometry;
+                         },
+                         [](const mapbox::feature::feature<double>& feature) {
+                              return mbgl::Feature(feature).geometry;
+                         },
+                         [](const mapbox::feature::feature_collection<double>& features) {
+                            return mbgl::Feature(features.front()).geometry;
+                         },
+                         [](const auto&) {
+                              return mapbox::geometry::empty();
+                         });
                 
-                const std::string shortLine = R"( {
-                       "type": "LineString",
-                       "coordinates": [
-                         [
-                           -16.083984375,
-                           -1.5818302639606454
-                         ],
-                         [
-                           -8.701171874999998,
-                           -4.039617826768424
-                         ],
-                         [
-                           -3.69140625,
-                           -5.0909441750333855
-                         ],
-                         [
-                           -2.63671875,
-                           -9.362352822055593
-                         ],
-                         [
-                           1.40625,
-                           -12.382928338487396
-                         ],
-                         [
-                           -2.021484375,
-                           -12.382928338487396
-                         ],
-                         [
-                           -5.361328125,
-                           -14.00869637063467
-                         ],
-                         [
-                           -10.72265625,
-                           -12.897489183755892
-                         ],
-                         [
-                           -10.72265625,
-                           -8.49410453755187
-                         ],
-                         [
-                           -17.666015625,
-                           -8.233237111274553
-                         ]
-                       ]
-                })";
-               
-                static mapbox::geojson::geojson route{mapbox::geojson::parse(line)};
-                const auto &geometry = route.get<mapbox::geometry::geometry<double>>();
+//                const auto &geometry = route.get<mapbox::geometry::geometry<double>>();
 //                const auto &lineString = geometry.get<mapbox::geometry::line_string<double>>();
 
-                const auto geojson = mbgl::GeometryBuffer(geometry, 500.0, 10).getJsonBuffer();
+                const auto geojson = mbgl::GeometryBuffer(geometry, 100.0, 50).getGeoJSONBuffer();
                 const std::string polygonSource("/Users/miaozhao/Work/MacOs/polygon.geojson");
-                mbgl::GeometryBuffer::writeGeoJson(polygonSource, geojson);
-                
+                mbgl::GeometryBuffer::writeGeoJSON(polygonSource, geojson);
+
                 auto s1 = std::make_unique<GeoJSONSource>("polygon");
                 s1->setGeoJSON(mapbox::geojson::parse(geojson));
                 view->map->getStyle().addSource(std::move(s1));
 
                 auto s2 = std::make_unique<GeoJSONSource>("line");
-               s2->setGeoJSON(route);
-               view->map->getStyle().addSource(std::move(s2));
+                s2->setGeoJSON(route);
+                view->map->getStyle().addSource(std::move(s2));
                 
                 auto fillLayer = std::make_unique<mbgl::style::FillLayer>("fill", "polygon");
                 fillLayer->setFillColor(mbgl::Color::black());
                 fillLayer->setFillOpacity(0.1);
                 view->map->getStyle().addLayer(std::move(fillLayer));
-                
-                auto lineLayer = std::make_unique<mbgl::style::LineLayer>("line", "line");
-                lineLayer->setLineColor(mbgl::Color::red());
-                view->map->getStyle().addLayer(std::move(lineLayer));
+
+               auto lineLayer = std::make_unique<mbgl::style::LineLayer>("line", "line");
+               lineLayer->setLineColor(mbgl::Color::red());
+               view->map->getStyle().addLayer(std::move(lineLayer));
                 
                 auto &style = view->map->getStyle();
                 auto labelLayer = style.getLayer("poi-label");
                 if (labelLayer) {
-//                    labelLayer->getProperty("text-opacity");
                     auto symbolLayer = static_cast<mbgl::style::SymbolLayer *>(labelLayer);
-//                    std::stringstream ss;
-//                    ss << std::string(R"(["case", ["within", )") << geojson << std::string(R"( ], "red", "blue"] )");
-//                    auto expr = createExpression(ss.str().c_str());
-//                    if (expr) {
-//                        symbolLayer->setTextColor(PropertyExpression<mbgl::Color>(std::move(expr)));
-//                    }
                     std::stringstream ss;
                     ss << std::string(R"(["within", )") << geojson << std::string(R"( ])");
                     auto expr = createExpression(ss.str().c_str());
@@ -635,39 +454,6 @@ void GLFWView::onKey(GLFWwindow *window, int key, int /*scancode*/, int action, 
                         symbolLayer->setFilter(Filter(std::move(expr)));
                     }
                 }
-                
-
-//                if (labelLayer) {
-//                    auto symbolLayer = static_cast<mbgl::style::SymbolLayer *>(labelLayer);
-//                    std::stringstream ss;
-//                    ss << std::string(R"(["within", )") << geoSource << std::string(R"( ])");
-//                    auto expr = createExpression(ss.str().c_str());
-//                    if (expr) {
-//                        symbolLayer->setFilter(Filter(std::move(expr)));
-//                    }
-//                }
-//                auto layer = style.getLayer("circle-label");
-//                if (layer) {
-////                    labelLayer->getCircleColor();
-//                    auto circleLayer = static_cast<mbgl::style::CircleLayer *>(layer);
-//                    std::stringstream ss;
-//                    ss << std::string(R"(["case", ["within", )") << geoSource << std::string(R"a( ], ["rgb", 153, 128, 250], ["rgb", 249, 138,175]])a");
-//                    //                    ss << std::string(R"( ["within", )") << geoSource
-//                    //                    << std::string(R"( ] )");
-//                    auto expr = createExpression(ss.str().c_str());
-//                    if (expr) {
-//                        circleLayer->setCircleColor(PropertyExpression<mbgl::Color>(std::move(expr)));
-//                    }
-//                }
-//                 if (layer) {
-//                    auto circleLayer = static_cast<mbgl::style::CircleLayer *>(layer);
-//                    std::stringstream ss;
-//                    ss << std::string(R"(["within", )") << geojson << std::string(R"( ])");
-//                    auto expr = createExpression(ss.str().c_str());
-//                    if (expr) {
-//                        circleLayer->setFilter(Filter(std::move(expr)));
-//                    }
-//                }
             } break;
         }
     }

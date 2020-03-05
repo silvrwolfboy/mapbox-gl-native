@@ -4,27 +4,26 @@
 #include <boost/geometry/geometries/geometries.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
 
-#include <rapidjson/document.h>
-#include <rapidjson/error/en.h>
 #include <rapidjson/prettywriter.h>
 #include <rapidjson/rapidjson.h>
 #include <rapidjson/stringbuffer.h>
-#include <mapbox/geojson_impl.hpp>
 
 #include <mbgl/util/geometry.hpp>
-#include <mbgl/util/optional.hpp>
 #include <mbgl/util/variant.hpp>
+#include <mbgl/util/logging.hpp>
+#include <mbgl/util/optional.hpp>
 
 #include <mapbox/geometry/geometry.hpp>
+#include <mapbox/geojson_impl.hpp>
 
-#include <cerrno>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <iostream>
-#include <sstream>
+#include <string>
 
-namespace {
+namespace mbgl {
+namespace  {
+
 typedef double coordinate_type;
 
 typedef boost::geometry::model::d2::point_xy<coordinate_type> BoostPoint;
@@ -59,40 +58,62 @@ double latFromMercatorY(double y) {
     return 360 / M_PI * std::atan(std::exp(y2 * M_PI / 180)) - 90;
 }
 
-BoostPoint getBoostPointFromLngLat(const mapbox::geometry::point<double> point) {
+BoostPoint mercatorPointFromLngLat(const mapbox::geometry::point<double> point) {
     return {mercatorXfromLng(point.x), mercatorYfromLat(point.y)};
 }
 
-mapbox::geometry::point<double> getLngLatFromBoostPoint(const BoostPoint& point) {
+mapbox::geometry::point<double> lngLatPointFromMercator(const BoostPoint& point) {
     return {lngFromMercatorX(point.x()), latFromMercatorY(point.y())};
 }
 
-/**
- * Determine the Mercator scale factor for a given latitude, see
- * https://en.wikipedia.org/wiki/Mercator_projection#Scale_factor
- *
- * At the equator the scale factor will be 1, which increases at higher latitudes.
- *
- * @param {number} lat Latitude
- * @returns {number} scale factor
- * @private
- */
-double mercatorScale(double lat) {
-    return 1 / std::cos(lat * M_PI / 180);
+
+// Determine the Mercator scale factor for a given latitude, see
+// https://en.wikipedia.org/wiki/Mercator_projection#Scale_factor
+//
+// At the equator the scale factor will be 1, which increases at higher latitudes.
+double mercatorScale(double latitude) {
+    return 1 / std::cos(latitude * M_PI / 180);
 }
-/**
- * Returns the distance of 1 meter in `MercatorCoordinate` units at this latitude.
- *
- * For coordinates in real world units using meters, this naturally provides the scale
- * to transform into `MercatorCoordinate`s.
- *
- * @returns {number} Distance of 1 meter in `MercatorCoordinate` units.
- */
-double meterInMercatorCoordinateUnits(double lat) {
+
+// Returns the distance of 1 meter in `MercatorCoordinate` units at this latitude.
+//
+// For coordinates in real world units using meters, this naturally provides the scale
+// to transform into `MercatorCoordinate`s.
+double meterInMercatorCoordinateUnits(double lattitude) {
     // 1 meter / circumference at equator in meters * Mercator projection scale factor at this latitude
     static const double earthCircumfrence = 2 * M_PI * earthRadius; // meters
-    return 1 / earthCircumfrence * mercatorScale(lat);
+    return 1 / earthCircumfrence * mercatorScale(lattitude);
 }
+
+// Convert polygon geometry from mercator to lnglat
+mapbox::geometry::multi_polygon<double> lngLatPolygonFromMercator(const BoostMultiPolygon& polygons) {
+    mapbox::geometry::multi_polygon<double> mapboxPolygons;
+    mapboxPolygons.reserve(polygons.size());
+    for (const auto& polygon : polygons) {
+        mapbox::geometry::polygon<double> mapboxPolygon;
+        const auto& outerRing = polygon.outer();
+        const auto& innerRings = polygon.inners();
+        mapboxPolygon.reserve(1 + innerRings.size());
+    
+        mapbox::geometry::linear_ring<double> ring;
+        ring.reserve(outerRing.size());
+        for (const auto& p : outerRing) {
+            ring.emplace_back(lngLatPointFromMercator(p));
+        }
+        mapboxPolygon.push_back(std::move(ring));
+
+        for (const auto& r : innerRings) {
+            ring.reserve(r.size());
+            for (const auto& p : r) {
+                ring.emplace_back(lngLatPointFromMercator(p));
+            }
+            mapboxPolygon.push_back(std::move(ring));
+        }
+        mapboxPolygons.push_back(std::move(mapboxPolygon));
+    }
+    return mapboxPolygons;
+}
+
 
 void generateFile(const std::string& filename, const std::string& data) {
     FILE* fd = fopen(filename.c_str(), "wb");
@@ -104,32 +125,10 @@ void generateFile(const std::string& filename, const std::string& data) {
     }
 }
 
-mapbox::geometry::multi_polygon<double> resultConverter(const BoostMultiPolygon& polygons) {
-    mapbox::geometry::multi_polygon<double> mapboxPolygons;
-    for (const auto& polygon : polygons) {
-        mapbox::geometry::polygon<double> mapboxPolygon;
-        mapbox::geometry::linear_ring<double> ring;
-        const auto& outerRing = polygon.outer();
-        for (const auto& p : outerRing) {
-            ring.emplace_back(getLngLatFromBoostPoint(p));
-        }
-        mapboxPolygon.push_back(std::move(ring));
-        const auto& innerRing = polygon.inners();
-        for (const auto& r : innerRing) {
-            for (const auto& p : r) {
-                ring.emplace_back(getLngLatFromBoostPoint(p));
-            }
-            mapboxPolygon.push_back(std::move(ring));
-        }
-        mapboxPolygons.push_back(std::move(mapboxPolygon));
-    }
-    return mapboxPolygons;
-}
-
-
+// Convert geometry to geojson
 std::string getGeoStringBuffer(const mapbox::geometry::geometry<double> geometry, bool singleLine = false) {
     using JSValue = rapidjson::GenericValue<rapidjson::UTF8<>, rapidjson::CrtAllocator>;
-    unsigned indent = 4;
+    unsigned indent = 2;
     rapidjson::CrtAllocator allocator;
     rapidjson::StringBuffer buffer;
     rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
@@ -141,15 +140,14 @@ std::string getGeoStringBuffer(const mapbox::geometry::geometry<double> geometry
     json.AddMember("type", "Feature", allocator);
     JSValue v;
     v.SetObject();
-     json.AddMember("properties",v, allocator);
+    json.AddMember("properties",v, allocator);
     json.AddMember("geometry", mapbox::geojson::convert(geometry, allocator), allocator);
     json.Accept(writer);
 
-    const auto jsonGeo = buffer.GetString();
-    generateFile("/Users/miaozhao/Work/MacOs/geo.json", jsonGeo);
-    return jsonGeo;
+    return buffer.GetString();
 }
 
+// Generate polygon buffer based on the type of geometry inputs
 mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry::geometry<double>& geometries,
                                                          const double distanceInMeter,
                                                          const int pointsPerCircle) {
@@ -158,7 +156,8 @@ mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry:
         [&distanceInMeter, &bufferDistance, &pointsPerCircle](const mapbox::geometry::point<double>& point) {
             // Convert meter to boost geometry distance
             bufferDistance = meterInMercatorCoordinateUnits(point.y) * distanceInMeter;
-            const auto boostGeometry = getBoostPointFromLngLat(point);
+            // Convert geometry to Mercator
+            const auto boostGeometry = mercatorPointFromLngLat(point);
             BoostMultiPolygon polygons;
             boost::geometry::buffer(boostGeometry,
                                     polygons,
@@ -169,18 +168,17 @@ mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry:
                                     CircleStrategy(pointsPerCircle));
 
             assert(polygons.size() > 0);
-            return resultConverter(polygons);
+            return lngLatPolygonFromMercator(polygons);
         },
         [&distanceInMeter, &bufferDistance, &pointsPerCircle](const mapbox::geometry::multi_point<double>& points) {
-            // Convert meter to boost geometry distance
             assert(points.size());
+            // Convert meter to boost geometry distance
             bufferDistance = meterInMercatorCoordinateUnits(points.front().y) * distanceInMeter;
-            // Declare/fill a linestring
+
             BoostMultiPoint boostPoints;
             for (const auto& p : points) {
-                boostPoints.push_back(getBoostPointFromLngLat(p));
+                boostPoints.push_back(mercatorPointFromLngLat(p));
             }
-            //            return boostPoints;
             BoostMultiPolygon polygons;
             boost::geometry::buffer(boostPoints,
                                     polygons,
@@ -191,18 +189,17 @@ mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry:
                                     CircleStrategy(pointsPerCircle));
 
             assert(polygons.size() > 0);
-            return resultConverter(polygons);
+            return lngLatPolygonFromMercator(polygons);
         },
         [&distanceInMeter, &bufferDistance, &pointsPerCircle](const mapbox::geometry::line_string<double>& line) {
             // Convert meter to boost geometry distance
             assert(line.size());
             bufferDistance = meterInMercatorCoordinateUnits(line.front().y) * distanceInMeter;
-            // Declare/fill a linestring
+
             BoostLineString boostLine;
             for (const auto& p : line) {
-                boostLine.push_back(getBoostPointFromLngLat(p));
+                boostLine.push_back(mercatorPointFromLngLat(p));
             }
-            //            return boostLine;
             BoostMultiPolygon polygons;
             boost::geometry::buffer(boostLine,
                                     polygons,
@@ -213,23 +210,23 @@ mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry:
                                     CircleStrategy(pointsPerCircle));
 
             assert(polygons.size() > 0);
-            return resultConverter(polygons);
+            return lngLatPolygonFromMercator(polygons);
         },
         [&distanceInMeter, &bufferDistance, &pointsPerCircle](
             const mapbox::geometry::multi_line_string<double>& lines) {
             // Convert meter to boost geometry distance
             assert(lines.size());
             bufferDistance = meterInMercatorCoordinateUnits(lines.front().front().y) * distanceInMeter;
-            // Declare/fill a linestring
+
             BoostMultiLineString boostLines;
             for (const auto& line : lines) {
                 BoostLineString boostLine;
                 for (const auto& p : line) {
-                    boostLine.push_back(getBoostPointFromLngLat(p));
+                    boostLine.push_back(mercatorPointFromLngLat(p));
                 }
                 boostLines.push_back(boostLine);
             }
-            //            return boostLines;
+
             BoostMultiPolygon polygons;
             boost::geometry::buffer(boostLines,
                                     polygons,
@@ -240,34 +237,48 @@ mapbox::geometry::multi_polygon<double> getPolygonBuffer(const mapbox::geometry:
                                     CircleStrategy(pointsPerCircle));
 
             assert(polygons.size() > 0);
-            return resultConverter(polygons);
+            return lngLatPolygonFromMercator(polygons);
         },
-                            [](const auto&) { return mapbox::geometry::multi_polygon<double>(); });
+        [](const auto&) {
+            mbgl::Log::Warning(mbgl::Event::General, "Geometry only supports Point/LineString geometry type.");
+            return mapbox::geometry::multi_polygon<double>();
+        });
 }
 } // namespace
 
-namespace mbgl {
 class GeometryBuffer {
 public:
     GeometryBuffer(const mapbox::geometry::geometry<double>& geometries_,
-                   const double bufferDistanceInMeter_,
-                   const int pointsPerCircle_)
-        : geometries(geometries_), bufferDistanceInMeter(bufferDistanceInMeter_), pointsPerCircle(pointsPerCircle_){};
+                   const double bufferRadiusInMeter_,
+                   const uint32_t pointsPerCircle_)
+        : geometries(geometries_), bufferRadiusInMeter(bufferRadiusInMeter_), pointsPerCircle(pointsPerCircle_){};
 
-    mapbox::geometry::multi_polygon<double> getGeometryBuffer() {
-        return getPolygonBuffer(geometries, bufferDistanceInMeter, pointsPerCircle);
+    mbgl::optional<mapbox::geometry::multi_polygon<double>> getGeometryBuffer() {
+        auto ret = getPolygonBuffer(geometries, bufferRadiusInMeter, pointsPerCircle);
+        if (ret.empty()) {
+            return nullopt;
+        }
+        return ret;
     }
 
-    std::string getJsonBuffer() {
+    std::string getGeoJSONBuffer(bool singleLine = false) {
         const auto geoBuffer = getGeometryBuffer();
-        return getGeoStringBuffer(geoBuffer);
+        if (geoBuffer) {
+            return getGeoStringBuffer(*geoBuffer, singleLine);
+        }
+        return {};
+    }
+    
+    static std::string geoJSONFromGeometryBuffer(const mapbox::geometry::multi_polygon<double>& geometryBuffer, bool singleLine = false) {
+        return getGeoStringBuffer(geometryBuffer, singleLine);
     }
 
-    static void writeGeoJson(const std::string& path, const std::string& json) { generateFile(path, json); }
-
+    static void writeGeoJSON(const std::string& path, const std::string& json) { generateFile(path, json); }
+    
+private:
     mapbox::geometry::geometry<double> geometries;
-    double bufferDistanceInMeter;
-    int pointsPerCircle;
+    double bufferRadiusInMeter;
+    uint32_t pointsPerCircle;
 };
 
 } // namespace mbgl
