@@ -14,6 +14,9 @@ workflows:
   version: 2
   development:
     jobs:
+      - trigger-pipeline:
+          name: downstream-internal
+          slug: mapbox/mapbox-gl-native-internal
       - sanity-checks
       - android-benchmark-runner
       - android-api-breakage
@@ -622,6 +625,17 @@ jobs:
             metricsResult=$(gsutil ls -d gs://test-lab-186672a0qp5bq-ycr70axads3nc/render-test-app-${CIRCLE_BUILD_NUM}/*/*/sdcard/baselines/*) || true
             gsutil -m cp -r $metricsResult metrics/android-render-test-runner/ || true
       - save
+  trigger-pipeline:
+    executor: ubuntu-disco
+    parameters:
+      slug:
+        type: string
+    steps:
+      - checkout
+      - run:
+          name: Trigger Pipeline
+          command: |
+              scripts/circleci_job --slug << parameters.slug >> --params "{ \"upstream\": true, \"hash\": \"$CIRCLE_SHA1\" }"
   sanity-checks:
     executor: ubuntu-disco
     steps:
