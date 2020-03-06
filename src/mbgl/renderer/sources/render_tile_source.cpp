@@ -152,6 +152,7 @@ void RenderTileSource::removeFeatureState(const optional<std::string>& sourceLay
 
 void RenderTileSource::reduceMemoryUse() {
     tilePyramid.reduceMemoryUse();
+    tilePyramid.clearAll();
 }
 
 void RenderTileSource::dumpDebugLogs() const {
