@@ -50,6 +50,7 @@
     "query-tests/regressions/mapbox-gl-js#7883": "https://github.com/mapbox/mapbox-gl-native/issues/14585",
     "query-tests/world-wrapping/box": "skip - needs issue",
     "query-tests/regressions/mapbox-gl-js#8999": "https://github.com/mapbox/mapbox-gl-js/pull/9138",
+    "query-tests/evaluated/line-width": "https://github.com/mapbox/mapbox-gl-js/pull/9198",
     "render-tests/background-color/colorSpace-hcl": "needs issue",
     "render-tests/background-color/transition": "https://github.com/mapbox/mapbox-gl-native/issues/10619",
     "render-tests/canvas/default": "skip - js specific",
